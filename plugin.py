@@ -175,6 +175,8 @@ class MCP23017Plugin:
             self._poolingTime=pooling/10
 
     def __interruptCall(self,callback):
+        # Workaround for (FindModule) Error with new domoticz stalbe version
+        import Domoticz
         Domoticz.Debug("Interruption catched")
         for i in range (0,2):
             if self._mask[i] > 0:
