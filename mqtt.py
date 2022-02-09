@@ -79,7 +79,7 @@ class MqttClientSH2:
             self._connection.Send({'Verb': 'PING'})
 
     def publish(self, topic, payload, retain=0):
-        Domoticz.Debug("MqttClient::publish " + topic + " (" + payload + ")")
+        #Domoticz.Debug("MqttClient::publish " + topic + " (" + payload + ")")
 
         if (self._connection == None or not self.isConnected):
             self._open()
