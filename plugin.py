@@ -1,6 +1,10 @@
 # Manage a MCP23017 I2C Listener
-# $Id: plugin.py 147 2020-08-18 09:41:48Z eric $
+# $Id: plugin.py 187 2022-02-09 11:27:04Z eric $
 #
+# idx_cmd to execute given switch on click and change it's state
+# idx_only_cmd to execute given switch on click only
+# on_delay to keep icon status On during X cycles (if value return takes ime
+# off_delay
 
 """
 <plugin key="MCP23017_listener" name="MCP23017 Listener plugin" author="Morand" version="1.0.0" wikilink="" externallink="">
@@ -78,7 +82,7 @@ class MCP23017Plugin:
     GPPUB   = 0X0D # Pullup resistor Port B
     INTFA   = 0x0E #
     INTFB   = 0x0F #
-
+    
     enabled = False
     
     def __init__(self):
@@ -96,6 +100,10 @@ class MCP23017Plugin:
         self.mqttClient=None
         self._slaveMode=False
         self._inTransition={}
+        self._itLogger={}
+        self._logLevel=['Debug','Log','Status','Error']
+        for level in self._logLevel:
+            self._itLogger[level]=[]
         return
 
     def onStart(self):
@@ -174,10 +182,28 @@ class MCP23017Plugin:
         else:
             self._poolingTime=pooling/10
 
+    def __logIt(self,level,msg):
+        
+        if level not in self._logLevel:
+            level='Log'
+        if self._it != 0:
+            self._itLogger[level]+=[msg]
+        else:
+            self.myLog(level,msg)
+
+    def myLog(self,level,msg):
+        if level=='Debug':
+            Domoticz.Debug(msg)
+        elif level=='Log':
+            Domoticz.Log(msg)
+        elif level=='Status':
+            Domoticz.Status(msg)
+        elif level=='Error':
+            Domoticz.Error(msg)
+            
     def __interruptCall(self,callback):
-        # Workaround for (FindModule) Error with new domoticz stalbe version
         import Domoticz
-        Domoticz.Debug("Interruption catched")
+        self.__logIt('Debug',"Interruption catched")
         for i in range (0,2):
             if self._mask[i] > 0:
                 self.updateState(i)
@@ -189,22 +215,21 @@ class MCP23017Plugin:
             Domoticz.Device(Name='Input %d'%i, Unit=(i), TypeName="Switch", Subtype=0x49,Switchtype=0, Image=9).Create()
                 
     def __initPort(self,port,it=False):
-        Domoticz.Log("Init port: %d"%port)
+        self.__logIt('Log',"Init port: %d"%port)
         #set selected IO to input
         self._bus.write_byte_data(self._addr, MCP23017Plugin.IODIRA+port, self._mask[port])
         #set Inversion
-        Domoticz.Log("Set inverion mask for port %d: %s"%(port,bin(self._inversionMask[port])[2:].rjust(8,'0')))
+        self.__logIt('Log',"Set inverion mask for port %d: %s"%(port,bin(self._inversionMask[port])[2:].rjust(8,'0')))
         self._bus.write_byte_data(self._addr, MCP23017Plugin.IOPOLA+port, self._inversionMask[port])
         #set pullup 
         self._bus.write_byte_data(self._addr, MCP23017Plugin.GPPUA+port, self._mask[port])
         if it:
-            Domoticz.Debug("Enable interrupt for port %d"%port)
+            self.__logIt('Debug',"Enable interrupt for port %d"%port)
             #set It for input ports
             self._bus.write_byte_data(self._addr, MCP23017Plugin.GPINTENA+port, self._mask[port])
         else:
             self._bus.write_byte_data(self._addr, MCP23017Plugin.GPINTENA+port, 0x00)
             
-        
     def updateState(self,port):
         onceMore=False
         try :
@@ -216,9 +241,9 @@ class MCP23017Plugin:
                 time.sleep(0.8)
                 status  = self._bus.read_byte_data(self._addr, MCP23017Plugin.GPIOA+port)&self._mask[port]
             except Exception:
-                Domoticz.Error("can not get status, read error")
+                self.__logIt('Error',"can not get status, read error")
                 return
-        Domoticz.Debug('Status for port %d: %s'%(port,bin(status)[2:].rjust(8,'0')))
+        self.__logIt('Debug','Status for port %d: %s'%(port,bin(status)[2:].rjust(8,'0')))
 
         #Select only IO that have changed
         changes = self._lastState[port]^status
@@ -227,35 +252,27 @@ class MCP23017Plugin:
             #workaround for MCP23017 auto reset
             conf=self._bus.read_byte_data(self._addr, MCP23017Plugin.IODIRA+port)
             if(conf!=self._mask[port]):
-                Domoticz.Error("MCP20317 reset, reconfiguring port %d (%s to %s)"%(port,bin(conf)[2:].rjust(8,'0'),bin(self._mask[port])[2:].rjust(8,'0')))
+                self.__logIt('Error',"MCP20317 reset, reconfiguring port %d (%s to %s)"%(port,bin(conf)[2:].rjust(8,'0'),bin(self._mask[port])[2:].rjust(8,'0')))
                 self.__initPort(port)
                 status  = self._bus.read_byte_data(self._addr, MCP23017Plugin.GPIOA+port)&self._mask[port]
                 changes = self._lastState[port]^status
                 if changes==0:
                     return
             # -- End Workaround --
-            Domoticz.Log('Update port %d : %s'%(port,bin(changes)[2:].rjust(8,'0')))
-            Domoticz.Log('New values for port %d are %s'%(port,bin(status)[2:].rjust(8,'0')))
+            self.__logIt('Log','Update port %d : %s'%(port,bin(changes)[2:].rjust(8,'0')))
+            self.__logIt('Log','New values for port %d are %s'%(port,bin(status)[2:].rjust(8,'0')))
         statusStr=bin(status)[2:].rjust(8,'0')[::-1]
         for s in bin(self._mask[port])[2:].rjust(8,'0')[::-1]:
             if s == '1' :
                 Devices[(i+1+port*8)].Refresh()
                 if str(i+1+port*8) not in self._inTransition:
                     val=statusStr[i]
-                    #if (i+1+port*8) in self._revertList and Devices[(i+1+port*8)].nValue==int(val):
-                    #    Domoticz.Debug("Updating %d in revert value"%(i+1+port*8))
-                    #    if (val=='0'):
-                    #        val='1'
-                    #    else:
-                    #        val='0'
-                    #    self.updateUnit((i+1+port*8),int(val))
-                    #el
                     if Devices[(i+1+port*8)].nValue!=int(val):
-                        Domoticz.Debug("Updating %d"%(i+1+port*8))
+                        self.__logIt('Debug',"Updating %d"%(i+1+port*8))
                         self.updateUnit((i+1+port*8),int(val))
             i=i+1
         self._lastState[port]=status
-        Domoticz.Debug("In transition! %s"%(str(self._inTransition)))
+        self.__logIt('Debug',"In transition! %s"%(str(self._inTransition)))
                     
     #Update associated switch (idx_cmd)
     def updateUnit(self,unit, nvalue):
@@ -274,6 +291,13 @@ class MCP23017Plugin:
                 
     def onHeartbeat(self):
         Domoticz.Debug("onHeartbeat called")
+        for level in self._logLevel:
+            Domoticz.Debug("IT Logs")
+            for msg in self._itLogger[level]:
+                self.myLog(level,msg)
+            self._itLogger[level] = []
+            Domoticz.Debug("End of IT Logs")
+                
         if self._pooling and (self._poolingTime==0 or self._beat>self._poolingTime):
             #Read status
             if self._mask[0] > 0:
@@ -329,9 +353,15 @@ class MCP23017Plugin:
             
     def onCommand(self,Unit,Command,Level,Hue):
         r_idx=self.findOption(Unit,'idx_cmd')
+        ro_idx=self.findOption(Unit,'idx_only_cmd')
+
+        if ro_idx:
+            r_idx=ro_idx
+        
         if r_idx:
-            msg=json.dumps({'idx':r_idx,'nvalue':Devices[Unit].nValue,'svalue':Devices[Unit].sValue})
-            self.mqttClient.publish('domoticz/in',msg,0)
+            if not ro_idx:
+                msg=json.dumps({'idx':r_idx,'nvalue':Devices[Unit].nValue,'svalue':Devices[Unit].sValue})
+                self.mqttClient.publish('domoticz/in',msg,0)
             msg=json.dumps({'idx':r_idx,'command':'switchlight','switchcmd':Command})
             self.mqttClient.publish('domoticz/in',msg,0)
         
@@ -438,4 +468,5 @@ def DumpConfigToLog():
         Domoticz.Debug("Device sValue:   '" + Devices[x].sValue + "'")
         Domoticz.Debug("Device LastLevel: " + str(Devices[x].LastLevel))
     return
+
 
